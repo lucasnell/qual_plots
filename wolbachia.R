@@ -21,6 +21,9 @@ library(ggplot2)
 source('./wos/wos_search.R')
 
 
+load('classifications.RData')
+
+
 # Read CSV of data on sequenced genomes and standardize column names
 all_genomes <- read_csv("~/Google Drive/Wisconsin/gwas/genomes_2017-02-12.csv.gz", 
                         col_types = str_c(rep('c', 19), collapse = '')) %>% 
@@ -98,10 +101,18 @@ ins_wolb <- add_row(ins_wolb, class = 'Insecta', order = 'Diptera',
                     species = c('melanogaster', 'macrospina'), N = c(45,7), 
                     wolb = c(0.75,0))
 
-ins_taxa <- classification(insect_names, db = 'ncbi')
+# ins_taxa <- classification(insect_names, db = 'ncbi')
 
 ins_families <- lapply(ins_taxa, function(z) z$name[z$rank == 'family'][1]) %>% 
-    unlist(., use.names = FALSE)
+    unlist(., use.names = FALSE) %>% 
+    ifelse(. == 'Termitoidae', 'Termopsidae', .)
+
+ins_all_fams <- read.tree('insects_family.nwk')
+ins_fam_tr <- drop.tip(
+    ins_all_fams, 
+    ins_all_fams$tip.label[!ins_all_fams$tip.label %in% ins_families]
+    )
+
 
 
 # Species names that have been sequenced whose families are represented by Wolbachia 
@@ -110,7 +121,7 @@ surveyed <- insect_names[ins_families %in% ins_wolb$family]
 
 # Check if a species name is part of a family surveyed for Wolbachia
 # and if so, whether it was determined to have been infected
-check_wolb <- function(sp_name, colors = NULL){
+check_wolb <- function(sp_name){
     fam_name <- ins_families[insect_names == sp_name]
     if (!fam_name %in% ins_wolb$family){
         ret <- 1
@@ -118,19 +129,27 @@ check_wolb <- function(sp_name, colors = NULL){
         wolb <- filter(ins_wolb, family == fam_name)$wolb
         if (all(wolb == 0)){
             ret <- 2
-        } else if (all(wolb > 0)) {
-            ret <- 4
         } else {
             ret <- 3
         }
     }
-    if (is.null(colors)){
-        return(ret)
-    } else {
-        return(colors[ret])
-    }
+    return(ret)
 }
 
+# Same, but by family
+check_wolb_fam <- function(fam_name){
+    if (!fam_name %in% ins_wolb$family){
+        ret <- 1
+    } else {
+        wolb <- filter(ins_wolb, family == fam_name)$wolb
+        if (all(wolb == 0)){
+            ret <- 2
+        } else {
+            ret <- 3
+        }
+    }
+    return(ret)
+}
 
 
 ins_tr <- read.tree('./wos/insects.nwk')
@@ -138,27 +157,50 @@ ins_tr$tip.label <- gsub('_', ' ', ins_tr$tip.label)
 
 
 
-ins_df <- data.frame(sp = ins_tr$tip.label, 
+ins_df <- data_frame(sp = ins_tr$tip.label, 
                      wolb = factor(
                          sapply(ins_tr$tip.label, check_wolb, USE.NAMES = FALSE),
-                         levels = 1:4,
-                         labels = c('unknown', 'none', 'mixed', 'infected')
+                         levels = 1:3,
+                         labels = c('unknown', 'none', 'infected')
                          ))
 
 
+ins_fam_df <- data_frame(fam = ins_fam_tr$tip.label, 
+                     wolb = factor(
+                         sapply(ins_fam_tr$tip.label, check_wolb_fam, USE.NAMES = FALSE),
+                         levels = 1:3,
+                         labels = c('unknown', 'none', 'infected')
+                     ))
 
-i <- ggtree(ins_tr)
 
 
-i %<+% ins_df +
-    theme_tree2() +
+i <- ggtree(ins_fam_tr)
+i$data$x <- i$data$x - max(i$data$x)
+ip <- i %<+% ins_fam_df +
+    theme_tree2(axis.title.x = element_text(size = 14)) +
     # geom_treescale(x = 20, y = 30, width = 50, linesize = 1, offset = -2) +
-    geom_tiplab(aes(color = wolb), size = 1, fontface = 'bold.italic') +
-    scale_x_continuous(limits = c(0, 550)) +
-    scale_color_manual(values = c('gray80','#1b9e77','#d95f02','#7570b3'))# +
-    # theme(legend.position = c(0.25, 0.75))
+    geom_tiplab(aes(color = wolb), size = 2, fontface = 'bold.italic') +
+    scale_x_continuous('Time (mya)', limits = c(-500, 50),
+                       breaks = seq(-500, 0, 100), labels = seq(500, 0, -100)) +
+    scale_color_manual(values = c('gray80','#1b9e77','#d95f02'))# +
+ip
+
+# ggsave(ip, filename = '~/Desktop/ip.pdf', width = 6, height = 8, units = 'in')
 
 
+
+
+
+# i <- ggtree(ins_tr)
+# i %<+% ins_df +
+#     theme_tree2() +
+#     # geom_treescale(x = 20, y = 30, width = 50, linesize = 1, offset = -2) +
+#     geom_tiplab(aes(color = wolb), size = 1, fontface = 'bold.italic') +
+#     scale_x_continuous(limits = c(0, 550)) +
+#     scale_color_manual(values = c('gray80','#1b9e77','#d95f02','#7570b3'))# +
+#     # theme(legend.position = c(0.25, 0.75))
+
+# cat(paste(unique(ins_families), collapse = '\n'))
 
 
 
@@ -182,20 +224,39 @@ tmv_df <- read_csv('./wos/Bald.csv', col_types = 'ccciiiiii') %>%
     gather('w', 'order_family', of1:of2, na.rm = TRUE) %>% 
     select(group, subdivision, order_family, starts_with('tmv_'))
 
-plant_taxa <- classification(plant_names, db = 'ncbi')
+# plant_taxa <- classification(plant_names, db = 'ncbi')
 
 
+# tmv_taxa <- classification(unique(tmv_df$order_family), db = 'ncbi')
+tmv_fams <- tmv_taxa %>% 
+    discard(~ is.null(nrow(.x))) %>% 
+    names
 
-tmv_fams <- classification(unique(tmv_df$order_family), db = 'ncbi')
-tmv_fams <- names(tmv_fams)[!sapply(tmv_fams, function(d) is.null(nrow(d)))]
 
 plant_families <- lapply(plant_taxa, function(z) z$name[z$rank == 'family'][1]) %>% 
     unlist(., use.names = FALSE)
 plant_orders <- lapply(plant_taxa, function(z) z$name[z$rank == 'order'][1]) %>% 
     unlist(., use.names = FALSE)
 
-tmv_fams[tmv_fams %in% c(plant_orders, plant_families)]
+# tmv_fams[tmv_fams %in% c(plant_orders, plant_families)]
 
+# plant_families <- unique(c(order_fams, plant_families))
+
+
+
+# Families in the order(s) that've been examined for tmv
+order_fams <- plant_taxa %>% 
+    keep(~ any(.x$name %in% tmv_fams[tmv_fams %in% plant_orders])) %>% 
+    map_chr(~ .x$name[.x$rank == 'family']) %>% 
+    unique
+
+
+
+plant_all_fams <- read.tree('plants_family.nwk')
+plant_fam_tr <- drop.tip(
+    plant_all_fams, 
+    plant_all_fams$tip.label[!plant_all_fams$tip.label %in% unique(plant_families)]
+)
 
 
 
@@ -218,6 +279,27 @@ check_tmv <- function(sp_name){
 }
 
 
+
+
+# Check if a family name has been surveyed for TMV
+# and if so, whether it was determined to have been infected
+check_tmv_fam <- function(fam_name){
+    
+    ord_name <- plant_orders[plant_families == fam_name][1]
+    
+    if (!fam_name %in% tmv_fams & !ord_name %in% tmv_fams){
+        tmv <- as_data_frame(matrix(rep(NA,3), nrow = 1))
+        colnames(tmv) <- c('tmv_systemic', 'tmv_leaf', 'tmv_none')
+    } else {
+        tmv <- filter(tmv_df, order_family %in% c(fam_name, ord_name)) %>% 
+            select(starts_with('tmv_'))
+    }
+    return(tmv)
+}
+
+
+
+
 plant_df <- lapply(plant_tr$tip.label, check_tmv) %>% 
     bind_rows %>% 
     mutate(species = plant_tr$tip.label,
@@ -227,20 +309,49 @@ plant_df <- lapply(plant_tr$tip.label, check_tmv) %>%
                            labels = c('unknown', 'uninfected', 'infected'))) %>%
     select(species, everything())
 
+plant_fam_df <- lapply(plant_fam_tr$tip.label, check_tmv_fam) %>% 
+    bind_rows %>% 
+    mutate(fam = plant_fam_tr$tip.label,
+           inf = 1 - (tmv_none / (tmv_systemic + tmv_leaf + tmv_none)),
+           status = factor(ifelse(is.na(inf), 0, ifelse(inf == 0, 1, 2)), 
+                           levels = 0:2, 
+                           labels = c('unknown', 'uninfected', 'infected'))) %>%
+    select(fam, everything())
 
 
 
-p <- ggtree(plant_tr)
 
 
-p %<+% plant_df +
-    theme_tree2() +
-    geom_tiplab(aes(color = status), size = 1, fontface = 'bold.italic') +
-    # geom_tippoint(aes(color = status), size = 3) +
-    scale_x_continuous(limits = c(0, 550)) +
-    scale_color_manual(values = c('gray80','#1b9e77','#7570b3')) +
-    theme(legend.position = c(0.25, 0.75))
 
+
+p <- ggtree(plant_fam_tr)
+p$data$x <- p$data$x - max(p$data$x)
+pp <- p %<+% plant_fam_df +
+    theme_tree2(axis.title.x = element_text(size = 14)) +
+    geom_tiplab(aes(color = status), size = 2, fontface = 'bold.italic') +
+    scale_x_continuous('Time (mya)', limits = c(-550, 50),
+                       breaks = seq(-500, 0, 100), labels = seq(500, 0, -100)) +
+    scale_color_manual(values = c('gray80','#1b9e77','#d95f02'))
+pp
+
+# ggsave(pp, filename = '~/Desktop/pp.pdf', width = 6, height = 8, units = 'in')
+
+
+
+
+
+# p <- ggtree(plant_tr)
+# p %<+% plant_df +
+#     theme_tree2() +
+#     geom_tiplab(aes(color = status), size = 1, fontface = 'bold.italic') +
+#     # geom_tippoint(aes(color = status), size = 3) +
+#     scale_x_continuous(limits = c(0, 550)) +
+#     scale_color_manual(values = c('gray80','#1b9e77','#7570b3')) +
+#     theme(legend.position = c(0.25, 0.75))
+
+
+
+# save(ins_taxa, plant_taxa, tmv_taxa, file = 'classifications.RData')
 
 
 
